@@ -1,0 +1,6 @@
+{
+  "name": "VisionLab Hand Tracker",
+  "description": "A professional real-time hand tracking and landmark detection system powered by MediaPipe Vision Tasks.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": []
+}
