@@ -1,8 +1,8 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { HandLandmarkerResult } from "@mediapipe/tasks-vision";
-import { getHandLandmarker } from "../services/visionService";
-import { LANDMARK_CONNECTIONS } from "../constants";
+import { getHandLandmarker } from "@/services/visionService";
+import { LANDMARK_CONNECTIONS } from "@/constants";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Camera, 
@@ -16,11 +16,11 @@ import {
   Minimize2,
   Zap
 } from "lucide-react";
-import { Card } from "./ui/card";
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
-import { Slider } from "./ui/slider";
-import { Separator } from "./ui/separator";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Separator } from "@/components/ui/separator";
 
 export function HandTracker() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -36,12 +36,14 @@ export function HandTracker() {
   const [modelType, setModelType] = useState<"float16" | "int8">("float16");
   const [detectedGesture, setDetectedGesture] = useState<string>("Standby");
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [viewportZoom, setViewportZoom] = useState(1);
   
   // Interaction State
   const [dragObject, setDragObject] = useState({ x: 0.5, y: 0.5, isDragging: false, scale: 1 });
   const [isHovered, setIsHovered] = useState(false);
   const pinchFramesRef = useRef(0);
-  const pinchThresholdFrames = 5; // accidental select guard
+  const pinchThresholdFrames = 8; // Increased for better stability
+  const lastPinchDistRef = useRef<number | null>(null);
   
   const heatmapCanvasRef = useRef<HTMLCanvasElement>(null);
   const lastVideoTimeRef = useRef(-1);
@@ -137,6 +139,13 @@ export function HandTracker() {
     return "ACTIVE_MOTION";
   }, []);
 
+  const calculatePinchZoom = useCallback((hand1: any, hand2: any) => {
+    const getDist = (p1: any, p2: any) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    const center1 = { x: (hand1[4].x + hand1[8].x) / 2, y: (hand1[4].y + hand1[8].y) / 2 };
+    const center2 = { x: (hand2[4].x + hand2[8].x) / 2, y: (hand2[4].y + hand2[8].y) / 2 };
+    return getDist(center1, center2);
+  }, []);
+
   const drawLandmarks = useCallback((results: HandLandmarkerResult) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -196,7 +205,8 @@ export function HandTracker() {
         
         // Recognition & Interaction logic
         if (landmarkerResult.landmarks.length > 0) {
-          const firstHand = landmarkerResult.landmarks[0];
+          const hands = landmarkerResult.landmarks;
+          const firstHand = hands[0];
           const gesture = recognizeGesture(firstHand);
           setDetectedGesture(gesture);
           
@@ -204,9 +214,21 @@ export function HandTracker() {
           const indexTip = firstHand[8];
           const thumbTip = firstHand[4];
           
-          // Interaction Logic
+          // Handle Multi-hand Zoom
+          if (hands.length >= 2) {
+             const distAcross = calculatePinchZoom(hands[0], hands[1]);
+             if (lastPinchDistRef.current !== null) {
+               const delta = distAcross - lastPinchDistRef.current;
+               setViewportZoom(prev => Math.max(0.8, Math.min(3.0, prev + delta * 1.5)));
+             }
+             lastPinchDistRef.current = distAcross;
+          } else {
+             lastPinchDistRef.current = null;
+          }
+
+          // Interaction Logic (Draggable Obj)
           const distToObject = Math.hypot(indexTip.x - dragObject.x, indexTip.y - dragObject.y);
-          const isHovering = distToObject < 0.12; 
+          const isHovering = distToObject < 0.15; // increased hover range slightly
           setIsHovered(isHovering);
 
           const currentPinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
@@ -218,9 +240,8 @@ export function HandTracker() {
               const midX = (indexTip.x + thumbTip.x) / 2;
               const midY = (indexTip.y + thumbTip.y) / 2;
               
-              // Scale mapping: the further the thumb and index are, the larger the scale
-              // But only if we are pinching correctly
-              const targetScale = Math.max(0.4, Math.min(2.5, currentPinchDist * 20));
+              // Scale mapping: logarithmic feel for better control
+              const targetScale = Math.max(0.5, Math.min(3.0, currentPinchDist * 25));
               
               setDragObject(prev => ({ 
                 x: midX, 
@@ -238,6 +259,7 @@ export function HandTracker() {
           setDragObject(prev => ({ ...prev, isDragging: false }));
           setIsHovered(false);
           pinchFramesRef.current = 0;
+          lastPinchDistRef.current = null;
         }
         
         if (activeAnalysis === "mesh") {
@@ -360,24 +382,29 @@ export function HandTracker() {
           <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(#2a2a2c 1px, transparent 1px)', backgroundSize: '30px 30px' }}></div>
           
           <div className="relative w-full max-w-4xl aspect-video border border-[#2a2a2c] bg-[#0c0c0e] shadow-2xl flex items-center justify-center overflow-hidden">
-            <video 
-              ref={videoRef} 
-              className="absolute inset-0 w-full h-full object-cover grayscale brightness-50 contrast-125 opacity-40 scale-x-[-1]"
-              muted
-              playsInline
-            />
-            <canvas 
-              ref={canvasRef}
-              className="absolute inset-0 w-full h-full scale-x-[-1] pointer-events-none z-20"
-              width={1280}
-              height={720}
-            />
-            <canvas 
-              ref={heatmapCanvasRef}
-              className="absolute inset-0 w-full h-full scale-x-[-1] pointer-events-none z-10"
-              width={1280}
-              height={720}
-            />
+            <div 
+              className="absolute inset-0 w-full h-full"
+              style={{ transform: `scale(${viewportZoom})`, transition: 'transform 0.1s ease-out' }}
+            >
+              <video 
+                ref={videoRef} 
+                className="absolute inset-0 w-full h-full object-cover grayscale brightness-50 contrast-125 opacity-40 scale-x-[-1]"
+                muted
+                playsInline
+              />
+              <canvas 
+                ref={canvasRef}
+                className="absolute inset-0 w-full h-full scale-x-[-1] pointer-events-none z-20"
+                width={1280}
+                height={720}
+              />
+              <canvas 
+                ref={heatmapCanvasRef}
+                className="absolute inset-0 w-full h-full scale-x-[-1] pointer-events-none z-10"
+                width={1280}
+                height={720}
+              />
+            </div>
 
             <div className="absolute top-4 left-4 bg-emerald-500 text-black text-[10px] font-black px-2 py-1 uppercase tracking-tighter">Live Feed</div>
             
@@ -509,7 +536,7 @@ export function HandTracker() {
 
       <footer className="h-12 border-t border-[#2a2a2c] bg-[#0c0c0e] px-8 flex items-center justify-between">
         <div className="text-[10px] font-mono opacity-30 tracking-tight">
-          SYS_LOG: {isCapturing ? `Hand detected @ T+${Math.round(performance.now()/1000)}s | SCALE: ${dragObject.scale.toFixed(2)}x` : 'Awaiting sensor initialize sequence...'}
+          SYS_LOG: {isCapturing ? `Hand detected | SCALE: ${dragObject.scale.toFixed(2)}x | ZOOM: ${viewportZoom.toFixed(2)}x` : 'Awaiting sensor initialize sequence...'}
         </div>
         <div className="text-[10px] font-bold uppercase tracking-widest opacity-40">
           2026 © CODE ACADEMY UGANDA // KATO GEOFFREY
